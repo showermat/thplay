@@ -1,13 +1,13 @@
-#! /usr/bin/python
+#! /usr/bin/env python
 
-import os;
-import sqlite3;
-import subprocess;
-import threading;
-import random;
-import curses;
-import wcwidth;
-import readline;
+import os
+import sqlite3
+import subprocess
+import threading
+import random
+import curses
+import wcwidth
+import readline
 
 # Commands:
 # Enter:  Start playing
@@ -26,239 +26,257 @@ import readline;
 
 class Song:
 	def __init__(self, game, row):
-		self.game = game;
-		self.name = dict(); self.note = dict();
-		self.params = [None, None, None, None];
-		(gameno, self.num, self.name["jpn"], self.name["eng"], self.note["jpn"], self.note["eng"], self.params[0], self.params[1], self.params[2], self.params[3]) = row;
-		if self.params[0] is None: self.params = [];
-		self.player = None;
+		self.game = game
+		self.name = dict(); self.note = dict()
+		self.params = [None, None, None, None]
+		(gameno, self.num, self.name["jpn"], self.name["eng"], self.note["jpn"], self.note["eng"], self.params[0], self.params[1], self.params[2], self.params[3]) = row
+		if self.params[0] is None: self.params = []
+		self.player = None
 	def playable(self):
-		return self.game.playable() and len(self.params) > 0;
-		return True;
+		return self.game.playable() and len(self.params) > 0
+		return True
 	def getdata(self):
-		if not self.playable(): return None;
+		if not self.playable(): return None
 		if self.game.fmt in [1, 3]: # WAV, TH06
-			if self.game.fmt == 3: data = open(self.game.archive % (self.num), "rb");
-			else: data = open(self.game.archive, "rb");
-			(offset, alen, blen, rate) = self.params;
-			data.seek(offset);
-			parta = data.read(alen);
-			partb = data.read(blen);
+			if self.game.fmt == 3: data = open(self.game.archive % (self.num), "rb")
+			else: data = open(self.game.archive, "rb")
+			(offset, alen, blen, rate) = self.params
+			data.seek(offset)
+			parta = data.read(alen)
+			partb = data.read(blen)
 		elif self.game.fmt == 2: # OGG
-			rate = 44100;
-			(filestart, filelen, alen, blen) = self.params;
-			alen *= 4; blen *= 4;
-			data = open(self.game.archive, "rb");
-			data.seek(filestart);
-			filedata = bytearray(data.read(filelen));
-			k = ((filestart >> 1) | 0x23) & 0xff;
-			for i in range(len(filedata)): filedata[i] ^= k;
-			oggfile = subprocess.check_output(["/usr/bin/oggdec", "-R", "-b", str(16), "-o", "/dev/stdout", "/dev/stdin"], input = filedata);
-			parta = oggfile[:alen];
-			partb = oggfile[alen:alen+blen];
-		else: return None;
-		data.close();
-		return (rate, parta, partb);
+			rate = 44100
+			(filestart, filelen, alen, blen) = self.params
+			alen *= 4; blen *= 4
+			data = open(self.game.archive, "rb")
+			data.seek(filestart)
+			filedata = bytearray(data.read(filelen))
+			k = ((filestart >> 1) | 0x23) & 0xff
+			for i in range(len(filedata)): filedata[i] ^= k
+			oggfile = subprocess.check_output(["oggdec", "-R", "-b", str(16), "-o", "/dev/stdout", "/dev/stdin"], input = filedata)
+			parta = oggfile[:alen]
+			partb = oggfile[alen:alen+blen]
+		else: return None
+		data.close()
+		return (rate, parta, partb)
 	def play(self):
-		if not self.playable(): return;
-		(rate, parta, partb) = self.getdata();
+		if not self.playable(): return
+		(rate, parta, partb) = self.getdata()
 		# TODO libmpv here
 	def dump(self, reps = 2, fmt = "ogg"):
-		if not self.playable(): return;
-		(rate, parta, partb) = self.getdata();
-		output_exec = ["/usr/bin/sox", "-e", "signed-integer", "-r", str(rate), "-b", str(16), "-c", str(2), "-t", "raw", "-", "TH%s_%s.%s" % (self.game.num, self.num, fmt)];
-		out = subprocess.Popen(output_exec, stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.STDOUT);
-		out.stdin.write(parta);
-		for i in range(reps): out.stdin.write(partb);
+		if not self.playable(): return
+		(rate, parta, partb) = self.getdata()
+		fname = "TH%s_%s.%s" % (self.game.num, self.num, fmt)
+		output_exec = ["sox", "-e", "signed-integer", "-r", str(rate), "-b", str(16), "-c", str(2), "-t", "raw", "-", fname]
+		out = subprocess.Popen(output_exec, stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.STDOUT)
+		out.stdin.write(parta)
+		for i in range(reps): out.stdin.write(partb)
+		out.stdin.close()
+		out.wait()
+		if fmt == "ogg":
+			try:
+				from mutagen.oggvorbis import OggVorbis
+				f = OggVorbis(fname)
+				f["artist"] = ["ZUN"]
+				f["album"] = [self.game.name["eng"]]
+				f["title"] = [self.name["eng"]]
+				f["tracknumber"] = [str(int(self.num))]
+				f.save()
+			except ImportError: pass
 
 class Game:
 	def __init__(self, archdir, row):
-		self.name = dict();
-		(self.num, self.name["jpn"], self.name["eng"], self.name["rom"], self.name["trans"], self.fmt, archive) = row;
-		if archdir is not None and archive is not None and os.path.exists(archdir): self.archive = os.path.join(archdir, archive);
-		else: self.archive = None;
-		self.songs = [];
+		self.name = dict()
+		(self.num, self.name["jpn"], self.name["eng"], self.name["rom"], self.name["trans"], self.fmt, archive) = row
+		if archdir is not None and archive is not None and os.path.exists(archdir): self.archive = os.path.join(archdir, archive)
+		else: self.archive = None
+		self.songs = []
 	def playable(self):
-		return self.fmt in [1, 2, 3] and self.archive is not None;
+		return self.fmt in [1, 2, 3] and self.archive is not None
 	def add(self, row):
-		self.songs.append(Song(self, row));
+		self.songs.append(Song(self, row))
 
 class Player:
 	def __init__(self, song):
-		self.song = song;
-		if not song.playable(): return;
-		(self.rate, self.parta, self.partb) = song.getdata();
-		self.thread = None;
-		self.paused = False;
-		self.output = None;
-		self.signal = 0;
+		self.song = song
+		if not song.playable(): return
+		(self.rate, self.parta, self.partb) = song.getdata()
+		self.thread = None
+		self.paused = False
+		self.output = None
+		self.signal = 0
+		self.volume = -20
 	def play(self):
-		#output_exec = ["/usr/bin/sox", "-e", "signed-integer", "-r", str(self.rate), "-b", str(16), "-c", str(2), "-t", "raw", "-", "-d"];
-		output_exec = ["/usr/bin/pacat", "--rate", str(self.rate)];
-		self.output = subprocess.Popen(output_exec, stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.STDOUT);
+		output_exec = ["sox", "-e", "signed-integer", "-r", str(self.rate), "-b", "16", "-c", "2", "-t", "raw", "-", "-d", "gain", str(self.volume)]
+		#output_exec = ["pacat", "--rate", str(self.rate)]
+		self.output = subprocess.Popen(output_exec, stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.STDOUT)
 		try:
-			self.output.stdin.write(self.parta);
-			while True: self.output.stdin.write(self.partb);
-		except BrokenPipeError: return;
+			self.output.stdin.write(self.parta)
+			while True: self.output.stdin.write(self.partb)
+		except BrokenPipeError: return
 	def start(self):
-		if not self.song.playable: return;
-		self.thread = threading.Thread(target = self.play);
-		self.thread.start();
+		if not self.song.playable: return
+		self.thread = threading.Thread(target = self.play)
+		self.thread.start()
 	def stop(self):
-		if not self.thread or not self.output: return;
-		if self.paused: self.output.send_signal(18);
-		self.paused = False;
-		self.output.terminate();
-		self.thread.join();
-		self.output = None;
-		self.thread = None;
+		if not self.thread or not self.output: return
+		if self.paused: self.output.send_signal(18)
+		self.paused = False
+		self.output.terminate()
+		self.thread.join()
+		self.output = None
+		self.thread = None
 	def pause(self):
-		if not self.thread or not self.output: return;
+		if not self.thread or not self.output: return
 		if self.paused:
 			self.output.send_signal(18); # SIGCONT
-			self.paused = False;
+			self.paused = False
 		else:
 			self.output.send_signal(19); # SIGSTOP
-			self.paused = True;
+			self.paused = True
 
 def populate(dirs, titles):
-	dirfile = open(dirs, "r");
-	basedir = dirfile.readline().strip();
-	gamedirs = dict();
+	dirfile = open(dirs, "r")
+	basedir = dirfile.readline().strip()
+	gamedirs = dict()
 	for line in dirfile:
-		(game, dirname) = line.strip().split(":");
-		gamedirs[game] = os.path.join(basedir, dirname);
-	games = [];
-	db = sqlite3.connect(titles);
+		(game, dirname) = line.strip().split(":")
+		gamedirs[game] = os.path.join(basedir, dirname)
+	games = []
+	db = sqlite3.connect(titles)
 	for row in db.execute("select * from `game` order by `num` asc"):
-		games.append(Game(gamedirs[row[0]] if row[0] in gamedirs else None, row));
-		for row in db.execute("select * from `song` where `game` = ? order by `num` asc", (games[-1].num,)): games[-1].add(row);
-	db.close();
-	return games;
+		games.append(Game(gamedirs[row[0]] if row[0] in gamedirs else None, row))
+		for row in db.execute("select * from `song` where `game` = ? order by `num` asc", (games[-1].num,)): games[-1].add(row)
+	db.close()
+	return games
 
 def search(query, games, lang, startgame, startsong, direction):
-	query = query.casefold();
-	(game, song) = (startgame, startsong + direction);
+	query = query.casefold()
+	(game, song) = (startgame, startsong + direction)
 	while game != startgame or song != startsong:
 		if song >= len(games[game].songs):
-			game = (game + 1) % len(games);
-			song = 0;
+			game = (game + 1) % len(games)
+			song = 0
 		elif song < 0:
-			game = (game - 1) % len(games);
-			song = len(games[game].songs) - 1;
-		if games[game].songs[song].name[lang].casefold().find(query) != -1: return (game, song);
-		song += direction;
-	return (startgame, startsong);
+			game = (game - 1) % len(games)
+			song = len(games[game].songs) - 1
+		if games[game].songs[song].name[lang].casefold().find(query) != -1: return (game, song)
+		song += direction
+	return (startgame, startsong)
 
 def wdiff(string):
-	return len(string) - sum([ wcwidth.wcwidth(char) for char in string ]);
+	return len(string) - sum([ wcwidth.wcwidth(char) for char in string ])
 
 def menu(scr, games, lang, playing, game, song):
-	maxtracks = 42;
-	gamew = 50;
-	songw = 70;
-	pad = 4;
+	maxtracks = 42
+	gamew = 50
+	songw = 70
+	pad = 4
 	gameloc = (5, pad)
-	songloc = (gameloc[0], gameloc[1] + gamew + pad);
-	noteloc = (gameloc[0] + maxtracks + 2);
-	playloc = (2, gameloc[1]);
-	playw = gamew + songw + pad;
+	songloc = (gameloc[0], gameloc[1] + gamew + pad)
+	noteloc = (gameloc[0] + maxtracks + 2)
+	playloc = (2, gameloc[1])
+	playw = gamew + songw + pad
 	if playing:
-		scr.attron(curses.A_REVERSE);
-		msg = "  %s:%s  %s  " % (playing.song.game.num, playing.song.num, playing.song.name[lang]);
-		scr.addstr(playloc[0], playloc[1], (msg.center(playw + wdiff(msg))));
-		scr.attroff(curses.A_REVERSE);
+		scr.attron(curses.A_REVERSE)
+		msg = "  %s:%s  %s  " % (playing.song.game.num, playing.song.num, playing.song.name[lang])
+		scr.addstr(playloc[0], playloc[1], (msg.center(playw + wdiff(msg))))
+		scr.attroff(curses.A_REVERSE)
 	for i in range(len(games)):
-		if not games[i].playable(): scr.attron(curses.color_pair(1));
-		if i == game: scr.attron(curses.A_REVERSE);
-		msg = " %s  %s " % (games[i].num.ljust(3), games[i].name[lang]);
-		scr.addstr(gameloc[0] + i, gameloc[1], (msg.ljust(gamew + wdiff(msg))));
-		scr.attroff(curses.A_REVERSE);
-		scr.attroff(curses.color_pair(1));
+		if not games[i].playable(): scr.attron(curses.color_pair(1))
+		if i == game: scr.attron(curses.A_REVERSE)
+		msg = " %s  %s " % (games[i].num.ljust(3), games[i].name[lang])
+		scr.addstr(gameloc[0] + i, gameloc[1], (msg.ljust(gamew + wdiff(msg))))
+		scr.attroff(curses.A_REVERSE)
+		scr.attroff(curses.color_pair(1))
 	for i in range(len(games[game].songs)):
-		if not games[game].songs[i].playable(): scr.attron(curses.color_pair(1));
-		if i == song: scr.attron(curses.A_REVERSE);
-		msg = " %s  %s " % (games[game].songs[i].num.ljust(2), games[game].songs[i].name[lang]);
-		scr.addstr(songloc[0] + i, songloc[1], (msg.ljust(songw + wdiff(msg))));
-		scr.attroff(curses.A_REVERSE);
-		scr.attroff(curses.color_pair(1));
+		if not games[game].songs[i].playable(): scr.attron(curses.color_pair(1))
+		if i == song: scr.attron(curses.A_REVERSE)
+		msg = " %s  %s " % (games[game].songs[i].num.ljust(2), games[game].songs[i].name[lang])
+		scr.addstr(songloc[0] + i, songloc[1], (msg.ljust(songw + wdiff(msg))))
+		scr.attroff(curses.A_REVERSE)
+		scr.attroff(curses.color_pair(1))
 
-def prompt(scr, string):
-	promptloc = (5 + 42 + 2, 4);
-	scr.move(promptloc[0], promptloc[1]);
-	curses.curs_set(1);
-	scr.refresh();
-	curses.reset_shell_mode();
-	ret = input(string + "  ");
-	curses.reset_prog_mode();
-	curses.curs_set(0);
-	scr.refresh();
-	return ret;
+def prompt(scr, row, string):
+	# TODO Don't error if the terminal is too small?
+	promptloc = (5 + row + 2, 4)
+	scr.move(promptloc[0], promptloc[1])
+	curses.curs_set(1)
+	scr.refresh()
+	curses.reset_shell_mode()
+	ret = input(string + "  ")
+	curses.reset_prog_mode()
+	curses.curs_set(0)
+	scr.refresh()
+	return ret
 
 def browse(scr, games):
-	playing = None;
-	game = 8;
-	song = 0;
-	lang = "eng";
-	query = "";
-	curses.curs_set(0);
-	curses.init_pair(1, 240, curses.COLOR_BLACK);
+	playing = None
+	game = 0
+	song = 0
+	lang = "eng"
+	query = ""
+	curses.curs_set(0)
+	if curses.COLORS < 240: curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
+	else: curses.init_pair(1, 240, curses.COLOR_BLACK)
 	while True:
-		scr.clear();
-		try: menu(scr, games, lang, playing, game, song);
+		scr.clear()
+		try: menu(scr, games, lang, playing, game, song)
 		except curses.error: pass; # Don't die if the drawing goes wrong (term to small, etc.)
-		scr.refresh();
-		c = scr.getch();
-		oldgame = game;
-		if c == curses.KEY_LEFT and game > 0: game -= 1;
-		elif c == curses.KEY_RIGHT and game < len(games) - 1: game += 1;
-		elif c == curses.KEY_UP and song > 0: song -= 1;
-		elif c == curses.KEY_DOWN and song < len(games[game].songs) - 1: song += 1;
-		elif c == ord("q"): break;
+		contentheight = max(len(games), len(games[game].songs))
+		scr.refresh()
+		c = scr.getch()
+		oldgame = game
+		if (c == curses.KEY_LEFT or c == ord("h")) and game > 0: game -= 1
+		elif (c == curses.KEY_RIGHT or c == ord("l")) and game < len(games) - 1: game += 1
+		elif (c == curses.KEY_UP or c == ord("k")) and song > 0: song -= 1
+		elif (c == curses.KEY_DOWN or c == ord("j")) and song < len(games[game].songs) - 1: song += 1
+		elif c == ord("q"): break
 		elif c == ord("\n") and games[game].songs[song].playable():
-			if playing: playing.stop();
-			playing = Player(games[game].songs[song]);
-			playing.start();
+			if playing: playing.stop()
+			playing = Player(games[game].songs[song])
+			playing.start()
 		elif c == ord("x") and playing:
-			playing.stop();
-			playing = None;
-		elif c == ord(" ") and playing: playing.pause();
-		elif c == ord("c"): lang = "eng" if lang == "jpn" else "jpn";
+			playing.stop()
+			playing = None
+		elif c == ord(" ") and playing: playing.pause()
+		elif c == ord("c"): lang = "eng" if lang == "jpn" else "jpn"
 		elif c == ord("s"):
-			game = random.choice([ i for i in range(len(games)) if games[i].playable() ]);
-			#song = random.randrange(len(games[game].songs));
-			song = random.choice([ i for i in range(len(games[game].songs)) if games[game].songs[i].playable() ]);
+			game = random.choice([ i for i in range(len(games)) if games[i].playable() ])
+			#song = random.randrange(len(games[game].songs))
+			song = random.choice([ i for i in range(len(games[game].songs)) if games[game].songs[i].playable() ])
 			if playing:
-				playing.stop();
-				playing = Player(games[game].songs[song]);
-				playing.start();
+				playing.stop()
+				playing = Player(games[game].songs[song])
+				playing.start()
 		elif c == ord("/"):
-			query = prompt(scr, "Search:");
-			(game, song) = search(query, games, lang, game, song, +1);
-		elif c == ord("n"): (game, song) = search(query, games, lang, game, song, +1);
-		elif c == ord("p"): (game, song) = search(query, games, lang, game, song, -1);
+			query = prompt(scr, contentheight, "Search:")
+			(game, song) = search(query, games, lang, game, song, +1)
+		elif c == ord("n"): (game, song) = search(query, games, lang, game, song, +1)
+		elif c == ord("p"): (game, song) = search(query, games, lang, game, song, -1)
 		elif c == ord("g"):
-			try: (gamenum, songnum) = prompt(scr, "Go to:").split(":");
-			except ValueError: continue;
-			try: newgame = [ i for i in range(len(games)) if games[i].num == gamenum ][0];
-			except IndexError: continue;
-			try: newsong = [ i for i in range(len(games[newgame].songs)) if games[newgame].songs[i].num == songnum ][0];
-			except IndexError: continue;
-			(game, song) = (newgame, newsong);
+			try: (gamenum, songnum) = prompt(scr, contentheight, "Go to:").split(":")
+			except ValueError: continue
+			try: newgame = [ i for i in range(len(games)) if games[i].num == gamenum ][0]
+			except IndexError: continue
+			try: newsong = [ i for i in range(len(games[newgame].songs)) if games[newgame].songs[i].num == songnum ][0]
+			except IndexError: continue
+			(game, song) = (newgame, newsong)
 		elif c == ord("d"):
-			try: reps = int(prompt(scr, "Repetitions:"));
-			except ValueError: continue;
-			if reps <= 0: continue;
-			fmt = prompt(scr, "Format [ogg]:");
-			if fmt == "": fmt = "ogg";
-			games[game].songs[song].dump(reps, fmt);
+			try: reps = int(prompt(scr, contentheight, "Repetitions:"))
+			except ValueError: continue
+			if reps <= 0: continue
+			fmt = prompt(scr, contentheight, "Format [ogg]:")
+			if fmt == "": fmt = "ogg"
+			print("Exporting...")
+			games[game].songs[song].dump(reps, fmt)
 		elif c == ord("m"):
-			if playing: playing.stop();
-			games[game].songs[song].play();
-		if game != oldgame and song >= len(games[game].songs): song = len(games[game].songs) - 1;
-	if playing: playing.stop();
+			if playing: playing.stop()
+			games[game].songs[song].play()
+		if game != oldgame and song >= len(games[game].songs): song = len(games[game].songs) - 1
+	if playing: playing.stop()
 
-scriptdir = os.path.dirname(os.path.realpath(__file__));
-games = populate(os.path.join(scriptdir, "dirs.txt"), os.path.join(scriptdir, "titles.db"));
-curses.wrapper(browse, games);
+scriptdir = os.path.dirname(os.path.realpath(__file__))
+games = populate(os.path.join(scriptdir, "dirs.txt"), os.path.join(scriptdir, "titles.db"))
 
+if __name__ == "__main__": curses.wrapper(browse, games)
